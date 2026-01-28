@@ -268,6 +268,14 @@ class GestureStateMachine:
         )
 
 
+@dataclass
+class GestureResult:
+    """Result from gesture recognition"""
+    raw_gesture: Optional[str]  # Currently detected gesture (for hold tracking)
+    confirmed_gesture: Optional[str]  # Newly confirmed gesture (for tap actions)
+    confidence: float
+
+
 class GestureRecognizer:
     """Main gesture recognition coordinator"""
 
@@ -280,7 +288,7 @@ class GestureRecognizer:
         self.calibration = calibration
         self.state_machine = GestureStateMachine()
 
-    def recognize(self, landmarks: dict) -> Optional[str]:
+    def recognize(self, landmarks: dict) -> GestureResult:
         """
         Recognize gesture with priority order to prevent conflicts
         Priority (highest to lowest):
@@ -290,7 +298,7 @@ class GestureRecognizer:
         4. Squat (full body movement)
         5. Lean (least specific, base movement)
 
-        Returns gesture name or None
+        Returns GestureResult with raw and confirmed gestures
         """
         detected_gesture = None
         confidence = 0.0
@@ -330,11 +338,14 @@ class GestureRecognizer:
                 detected_gesture = "move_right"
                 confidence = 0.75
 
-        # Update state machine
+        # Update state machine for tap gestures
         current_time = time.perf_counter()
         gesture_event = self.state_machine.update(detected_gesture, confidence, current_time)
 
-        if gesture_event:
-            return gesture_event.gesture_type
+        confirmed = gesture_event.gesture_type if gesture_event else None
 
-        return None
+        return GestureResult(
+            raw_gesture=detected_gesture,
+            confirmed_gesture=confirmed,
+            confidence=confidence
+        )

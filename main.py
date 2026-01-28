@@ -8,7 +8,7 @@ import time
 import sys
 from capture import WebcamCapture, FrameData
 from pose_detector import PoseDetector
-from gesture_recognizer import GestureRecognizer
+from gesture_recognizer import GestureRecognizer, GestureResult
 from input_simulator import InputSimulator, InputCommand
 from calibration import CalibrationSystem
 from utils import SharedState, check_permissions
@@ -28,6 +28,7 @@ class CVFighterApp:
 
         self.threads = []
         self.is_calibrated = False
+        self.active_held_keys = {}  # gesture -> key mapping for currently held keys
 
     def initialize(self) -> bool:
         """Initialize all components"""
@@ -154,29 +155,28 @@ class CVFighterApp:
             return display_frame
 
         # Gesture recognition
-        gesture = self.gesture_recognizer.recognize(landmarks)
+        result = self.gesture_recognizer.recognize(landmarks)
 
-        if gesture:
-            # Update shared state for display
-            with self.shared_state.gesture_lock:
-                self.shared_state.current_gesture = gesture
+        # Handle hold gestures (movement keys held while gesture active)
+        self._handle_hold_gestures(result.raw_gesture)
 
-            # Send input command
-            key = config.GESTURE_KEY_MAPPING.get(gesture)
+        # Handle tap gestures (single press on confirmation)
+        if result.confirmed_gesture and result.confirmed_gesture in config.TAP_GESTURES:
+            key = config.GESTURE_KEY_MAPPING.get(result.confirmed_gesture)
             if key:
-                command = InputCommand(
-                    key=key,
-                    action="press",
-                    timestamp=time.perf_counter(),
-                    gesture_source=gesture
-                )
-                try:
-                    self.shared_state.input_queue.put_nowait(command)
-                except:
-                    pass  # Queue full, skip this input
+                # Send press
+                self._send_input(key, "press", result.confirmed_gesture)
+                # Send release shortly after for tap gestures
+                self._send_input(key, "release", result.confirmed_gesture)
+
+        # Update shared state for display
+        display_gesture = result.raw_gesture or result.confirmed_gesture
+        if display_gesture:
+            with self.shared_state.gesture_lock:
+                self.shared_state.current_gesture = display_gesture
 
         # Draw overlay
-        self._draw_overlay(display_frame, gesture)
+        self._draw_overlay(display_frame, display_gesture)
 
         # Calculate latency
         latency = (time.perf_counter() - start_time) * 1000
@@ -254,6 +254,43 @@ class CVFighterApp:
         cv2.putText(frame, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX,
                    1.0, color, 2)
 
+    def _handle_hold_gestures(self, raw_gesture: str):
+        """Handle hold-type gestures (press while active, release when done)"""
+        # Determine which hold gesture is currently active (if any)
+        current_hold = None
+        if raw_gesture and raw_gesture in config.HOLD_GESTURES:
+            current_hold = raw_gesture
+
+        # Release keys for gestures that are no longer active
+        gestures_to_release = []
+        for gesture, key in self.active_held_keys.items():
+            if gesture != current_hold:
+                self._send_input(key, "release", gesture)
+                gestures_to_release.append(gesture)
+
+        for gesture in gestures_to_release:
+            del self.active_held_keys[gesture]
+
+        # Press key for new hold gesture
+        if current_hold and current_hold not in self.active_held_keys:
+            key = config.GESTURE_KEY_MAPPING.get(current_hold)
+            if key:
+                self._send_input(key, "press", current_hold)
+                self.active_held_keys[current_hold] = key
+
+    def _send_input(self, key: str, action: str, gesture_source: str):
+        """Send input command to the input queue"""
+        command = InputCommand(
+            key=key,
+            action=action,
+            timestamp=time.perf_counter(),
+            gesture_source=gesture_source
+        )
+        try:
+            self.shared_state.input_queue.put_nowait(command)
+        except:
+            pass  # Queue full, skip this input
+
     def cleanup(self):
         """Clean up resources"""
         print("\nCleaning up...")
@@ -261,7 +298,12 @@ class CVFighterApp:
         # Signal threads to stop
         self.shared_state.is_running.clear()
 
-        # Release all keys
+        # Release all held gesture keys
+        for gesture, key in self.active_held_keys.items():
+            self._send_input(key, "release", gesture)
+        self.active_held_keys.clear()
+
+        # Release all keys in input simulator
         self.input_simulator.release_all_keys()
 
         # Wait for threads

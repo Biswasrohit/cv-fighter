@@ -1,7 +1,7 @@
 """
 Input simulation module with window detection and keyboard control
 """
-from pynput.keyboard import Controller
+from pynput.keyboard import Controller, Key
 import time
 import queue
 from dataclasses import dataclass
@@ -28,17 +28,18 @@ class InputCommand:
 
 
 class WindowDetector:
-    """Detects and focuses the browser window running the game"""
+    """Detects and focuses the game window (browser or executable)"""
 
     def __init__(self):
-        self.browser_names = config.WINDOW_DETECTION["browser_names"]
+        self.app_names = config.WINDOW_DETECTION["app_names"]
         self.game_keywords = config.WINDOW_DETECTION["game_title_keywords"]
+        self.match_any_app = config.WINDOW_DETECTION.get("match_any_app", True)
         self.cached_window = None
         self.cache_time = 0
         self.cache_duration = 5.0  # Cache window info for 5 seconds
 
     def find_game_window(self) -> Optional[dict]:
-        """Find browser window running the game"""
+        """Find game window (browser or executable)"""
         if not MACOS_AVAILABLE:
             return None
 
@@ -53,15 +54,25 @@ class WindowDetector:
                 Quartz.kCGNullWindowID
             )
 
-            # First pass: look for game title
+            # First pass: look for game title in ANY app (or just known apps)
             for window in window_list:
-                window_title = window.get('kCGWindowName', '')
-                owner_name = window.get('kCGWindowOwnerName', '')
+                window_title = window.get('kCGWindowName', '') or ''
+                owner_name = window.get('kCGWindowOwnerName', '') or ''
 
-                if owner_name not in self.browser_names:
-                    continue
+                # Check if title matches game keywords
+                title_matches = any(
+                    keyword.lower() in window_title.lower()
+                    for keyword in self.game_keywords
+                )
 
-                if any(keyword.lower() in window_title.lower() for keyword in self.game_keywords):
+                # Check if app name matches known apps
+                app_matches = any(
+                    app.lower() in owner_name.lower()
+                    for app in self.app_names
+                )
+
+                # Match if: title matches AND (any app allowed OR app is known)
+                if title_matches and (self.match_any_app or app_matches):
                     window_info = {
                         'window_id': window['kCGWindowNumber'],
                         'process_id': window['kCGWindowOwnerPID'],
@@ -73,17 +84,36 @@ class WindowDetector:
                     print(f"Found game window: {owner_name} - {window_title}")
                     return window_info
 
-            # Fallback: frontmost browser
+            # Second pass: look for known app names even without title match
+            for window in window_list:
+                window_title = window.get('kCGWindowName', '') or ''
+                owner_name = window.get('kCGWindowOwnerName', '') or ''
+
+                # Check if app name contains game-specific keywords
+                if any(kw.lower() in owner_name.lower() for kw in ["SSF2", "Smash"]):
+                    window_info = {
+                        'window_id': window['kCGWindowNumber'],
+                        'process_id': window['kCGWindowOwnerPID'],
+                        'app_name': owner_name,
+                        'title': window_title or '(no title)'
+                    }
+                    self.cached_window = window_info
+                    self.cache_time = time.time()
+                    print(f"Found game by app name: {owner_name}")
+                    return window_info
+
+            # Fallback: frontmost app if it's in our known list
             workspace = NSWorkspace.sharedWorkspace()
             frontmost_app = workspace.frontmostApplication()
+            frontmost_name = frontmost_app.localizedName()
 
-            if frontmost_app.localizedName() in self.browser_names:
+            if any(app.lower() in frontmost_name.lower() for app in self.app_names):
                 window_info = {
                     'process_id': frontmost_app.processIdentifier(),
-                    'app_name': frontmost_app.localizedName(),
-                    'title': 'Frontmost Browser (fallback)'
+                    'app_name': frontmost_name,
+                    'title': 'Frontmost App (fallback)'
                 }
-                print(f"Using frontmost browser: {window_info['app_name']}")
+                print(f"Using frontmost app: {window_info['app_name']}")
                 return window_info
 
         except Exception as e:
@@ -127,6 +157,27 @@ class InputSimulator:
             except Exception as e:
                 print(f"Error in input processing: {e}")
 
+    # Map string names to pynput Key objects for special keys
+    SPECIAL_KEYS = {
+        "Left": Key.left,
+        "Right": Key.right,
+        "Up": Key.up,
+        "Down": Key.down,
+        "Space": Key.space,
+        "Enter": Key.enter,
+        "Shift": Key.shift,
+        "Ctrl": Key.ctrl,
+        "Alt": Key.alt,
+        "Tab": Key.tab,
+        "Escape": Key.esc,
+    }
+
+    def _get_key(self, key_str: str):
+        """Convert key string to pynput key (handles special keys like arrows)"""
+        if key_str in self.SPECIAL_KEYS:
+            return self.SPECIAL_KEYS[key_str]
+        return key_str
+
     def _send_input(self, command: InputCommand):
         """Send keyboard input"""
         # Periodically check/focus game window
@@ -135,15 +186,18 @@ class InputSimulator:
             self._ensure_window_focused()
             self.last_focus_check = current_time
 
+        # Convert key string to pynput key
+        key = self._get_key(command.key)
+
         # Send key press/release
         try:
             if command.action == "press":
                 if command.key not in self.active_keys:
-                    self.keyboard.press(command.key)
+                    self.keyboard.press(key)
                     self.active_keys.add(command.key)
             elif command.action == "release":
                 if command.key in self.active_keys:
-                    self.keyboard.release(command.key)
+                    self.keyboard.release(key)
                     self.active_keys.discard(command.key)
         except Exception as e:
             print(f"Error sending input: {e}")
@@ -158,14 +212,15 @@ class InputSimulator:
             pass
         else:
             if not hasattr(self, '_warning_shown'):
-                print("Warning: Game window not found. Please keep the browser focused.")
-                print("Looking for browsers: " + ", ".join(self.window_detector.browser_names))
+                print("Warning: Game window not found. Please keep the game focused.")
+                print("Looking for window titles containing: " + ", ".join(self.window_detector.game_keywords))
                 self._warning_shown = True
 
     def release_all_keys(self):
         """Release all currently pressed keys"""
-        for key in list(self.active_keys):
+        for key_str in list(self.active_keys):
             try:
+                key = self._get_key(key_str)
                 self.keyboard.release(key)
             except:
                 pass

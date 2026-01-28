@@ -6,13 +6,19 @@ All thresholds and mappings are defined here for easy tuning
 # Gesture to keyboard mappings
 GESTURE_KEY_MAPPING = {
     "move_left": "a",
-    "move_right": "d",
+    "move_right": "Right",  # Arrow key (use "d" for WASD)
     "jump": "w",
     "crouch": "s",
-    "attack_basic": "j",
-    "attack_special": "k",
-    "block": "l"
+    "attack_basic": "p",
+    "attack_special": "o",
+    "block": "i"
 }
+
+# Gestures that should be HELD while active (vs single tap)
+# Hold gestures: key pressed while gesture detected, released when gesture ends
+# Tap gestures: single press when gesture confirmed
+HOLD_GESTURES = {"move_left", "move_right", "crouch", "block"}
+TAP_GESTURES = {"jump", "attack_basic", "attack_special"}
 
 # Gesture detection thresholds
 THRESHOLDS = {
@@ -50,8 +56,18 @@ MEDIAPIPE = {
 
 # Window detection
 WINDOW_DETECTION = {
-    "browser_names": ["Google Chrome", "Firefox", "Safari", "Microsoft Edge"],
+    # App names to look for (can be browser OR executable)
+    "app_names": [
+        # Browsers (legacy support)
+        "Google Chrome", "Firefox", "Safari", "Microsoft Edge",
+        # Game executables - add your game's app name here
+        "SSF2", "Super Smash Flash 2", "SuperSmashFlash2",
+        "nwjs", "nw",  # Common wrapper for web-based executables
+    ],
+    # Keywords to match in window title
     "game_title_keywords": ["Super Smash Flash", "McLeodGaming", "SSF2"],
+    # If True, accept ANY app if title matches keywords (recommended for executables)
+    "match_any_app": True,
     "focus_check_interval": 1.0,     # seconds between window focus checks
 }
 
