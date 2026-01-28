@@ -71,7 +71,7 @@ class CVFighterApp:
 
         print("Controls:")
         print("  'q' - Quit")
-        print("  'p' - Pause/Resume")
+        print("  SPACE - Pause/Resume")
         print("  'd' - Toggle debug mode")
         print("  'r' - Recalibrate")
         print()
@@ -94,7 +94,7 @@ class CVFighterApp:
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
-                elif key == ord('p'):
+                elif key == ord(' '):
                     if self.shared_state.is_paused.is_set():
                         self.shared_state.is_paused.clear()
                         print("Resumed")
